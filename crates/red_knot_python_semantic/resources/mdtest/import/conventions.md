@@ -1,0 +1,371 @@
+# Import conventions
+
+This document describes the conventions for importing symbols.
+
+Reference:
+
+- <https://typing.readthedocs.io/en/latest/spec/distributing.html#import-conventions>
+
+## Builtins scope
+
+When looking up for a name, red knot will fallback to using the builtins scope if the name is not
+found in the global scope. The `builtins.pyi` file, that will be used to resolve any symbol in the
+builtins scope, contains multiple symbols from other modules (e.g., `typing`) but those are not
+being re-exported.
+
+As per [PEP 484](https://peps.python.org/pep-0484/#stub-files):
+
+> Modules and variables imported into the stub are not considered exported from the stub unless the
+> import uses the `import ... as ...` form or the equivalent `from ... import ... as ...` form.
+
+```py
+# These symbols are being imported in `builtins.pyi` but shouldn't be considered as being
+# available in the builtins scope.
+
+# error: "Name `Literal` used when not defined"
+reveal_type(Literal)  # revealed: Unknown
+
+# error: "Name `sys` used when not defined"
+reveal_type(sys)  # revealed: Unknown
+```
+
+## Builtins import
+
+Similarly, trying to import the symbols from the builtins module which aren't explicitly exported
+should also raise an error.
+
+```py
+# error: "Module `builtins` has no member `Literal`"
+# error: "Module `builtins` has no member `sys`"
+from builtins import Literal, sys
+
+reveal_type(Literal)  # revealed: Unknown
+reveal_type(sys)  # revealed: Unknown
+
+# TODO: This should be an error but we don't understand `*` imports yet and
+# the `collections.abc` uses `from _collections_abc import *`.
+from math import Iterable
+
+reveal_type(Iterable)  # revealed: Unknown
+```
+
+## Explicitly re-exported symbols in stub files
+
+When explicitly re-exporting a symbol or a module, it should not raise an error when importing it.
+This tests both `import ...` and `from ... import ...` forms.
+
+Note: Submodule imports in `import ...` form doesn't work because it's a syntax error. For example,
+in `import os.path as os.path` the `os.path` is not a valid identifier.
+
+```py
+from b import Any, Literal, foo
+
+reveal_type(Any)  # revealed: typing.Any
+reveal_type(Literal)  # revealed: typing.Literal
+reveal_type(foo)  # revealed: <module 'foo'>
+```
+
+`b.pyi`:
+
+```pyi
+import foo as foo
+from typing import Any as Any, Literal as Literal
+```
+
+`foo.py`:
+
+```py
+```
+
+## Implicitly re-exported symbols in stub files
+
+Here, none of the symbols are being re-exported in the stub file.
+
+```py
+# error: 15 [unresolved-import] "Module `b` has no member `foo`"
+# error: 20 [unresolved-import] "Module `b` has no member `Any`"
+# error: 25 [unresolved-import] "Module `b` has no member `Literal`"
+from b import foo, Any, Literal
+
+reveal_type(Any)  # revealed: Unknown
+reveal_type(Literal)  # revealed: Unknown
+reveal_type(foo)  # revealed: Unknown
+```
+
+`b.pyi`:
+
+```pyi
+import foo
+from typing import Any, Literal
+```
+
+`foo.pyi`:
+
+```pyi
+```
+
+## Nested implicit re-exports
+
+Here, the import is being exported implicitly via a chain of modules.
+
+```py
+# error: "Module `a` has no member `Any`"
+from a import Any
+
+reveal_type(Any)  # revealed: Unknown
+```
+
+`a.pyi`:
+
+```pyi
+# error: "Module `b` has no member `Any`"
+from b import Any
+
+reveal_type(Any)  # revealed: Unknown
+```
+
+`b.pyi`:
+
+```pyi
+# error: "Module `c` has no member `Any`"
+from c import Any
+
+reveal_type(Any)  # revealed: Unknown
+```
+
+`c.pyi`:
+
+```pyi
+from typing import Any
+
+reveal_type(Any)  # revealed: typing.Any
+```
+
+## Mixed implicit and explicit re-exports
+
+But, if the symbol is being re-exported explicitly in one of the modules in the chain, it should not
+raise an error.
+
+```py
+# error: "Module `a` has no member `Any`"
+from a import Any
+
+reveal_type(Any)  # revealed: Unknown
+```
+
+`a.pyi`:
+
+```pyi
+from b import Any
+
+reveal_type(Any)  # revealed: Unknown
+```
+
+`b.pyi`:
+
+```pyi
+# error: "Module `c` has no member `Any`"
+from c import Any as Any
+
+reveal_type(Any)  # revealed: Unknown
+```
+
+`c.pyi`:
+
+```pyi
+from typing import Any
+
+reveal_type(Any)  # revealed: typing.Any
+```
+
+## Exported as different name
+
+The re-export convention only works when the aliased name is exactly the same as the original name.
+
+```py
+# error: "Module `a` has no member `Foo`"
+from a import Foo
+
+reveal_type(Foo)  # revealed: Unknown
+```
+
+`a.pyi`:
+
+```pyi
+from b import AnyFoo as Foo
+
+reveal_type(Foo)  # revealed: Literal[AnyFoo]
+```
+
+`b.pyi`:
+
+```pyi
+class AnyFoo: ...
+```
+
+## Exported using `__all__`
+
+Here, the symbol is re-exported using the `__all__` variable.
+
+```py
+# TODO: This should *not* be an error but we don't understand `__all__` yet.
+# error: "Module `a` has no member `Foo`"
+from a import Foo
+```
+
+`a.pyi`:
+
+```pyi
+from b import AnyFoo as Foo
+
+__all__ = ['Foo']
+```
+
+`b.pyi`:
+
+```pyi
+class AnyFoo: ...
+```
+
+## Runtime files
+
+For runtime files (i.e., `.py` files), the re-exported symbols should be inferred correctly.
+
+TODO: When we support rule selection, the `implicit-reexport` rule should be disabled by default and
+this test case should be updated to explicitly enable it.
+
+```py
+# error: "Module `b` does not explicitly export attribute `Foo`"
+from b import Foo
+
+reveal_type(Foo)  # revealed: Literal[Foo]
+```
+
+`b.py`:
+
+```py
+from c import Foo
+```
+
+`c.py`:
+
+```py
+class Foo: ...
+```
+
+## Implicit re-exports in `__init__.py`
+
+Red knot does not special case `__init__.py` files so if the symbols defined in `__init__.py` is in
+the form of an implicit re-export, it should raise an error.
+
+TODO: When we support rule selection, the `implicit-reexport` rule should be disabled by default and
+this test case should be updated to explicitly enable it.
+
+```py
+# error: 15 "Module `a` does not explicitly export attribute `Foo`"
+# error: 20 "Module `a` does not explicitly export attribute `c`"
+from a import Foo, c, foo
+
+reveal_type(Foo)  # revealed: Literal[Foo]
+reveal_type(c)  # revealed: <module 'a.b.c'>
+reveal_type(foo)  # revealed: <module 'a.foo'>
+```
+
+`a/__init__.py`:
+
+```py
+from .b import c
+from .foo import Foo
+```
+
+`a/foo.py`:
+
+```py
+class Foo: ...
+```
+
+`a/b/__init__.py`:
+
+```py
+```
+
+`a/b/c.py`:
+
+```py
+```
+
+## Explicit re-exports in `__init__.py`
+
+But, if they're explicitly re-exported, it should not raise an error.
+
+TODO: When we support rule selection, the `implicit-reexport` rule should be disabled by default and
+this test case should be updated to explicitly enable it.
+
+```py
+from a import Foo, c, foo
+
+reveal_type(Foo)  # revealed: Literal[Foo]
+reveal_type(c)  # revealed: <module 'a.b.c'>
+reveal_type(foo)  # revealed: <module 'a.foo'>
+```
+
+`a/__init__.py`:
+
+```py
+from .b import c as c
+from .foo import Foo as Foo
+```
+
+`a/foo.py`:
+
+```py
+class Foo: ...
+```
+
+`a/b/__init__.py`:
+
+```py
+```
+
+`a/b/c.py`:
+
+```py
+```
+
+## Re-exports in `__init__.pyi`
+
+Similarly, for an `__init__.pyi` (stub) file, the implicit re-export should raise an error but the
+inference would be `Unknown`.
+
+```py
+# error: 15 "Module `a` has no member `Foo`"
+# error: 20 "Module `a` has no member `c`"
+from a import Foo, c, foo
+
+reveal_type(Foo)  # revealed: Unknown
+reveal_type(c)  # revealed: Unknown
+reveal_type(foo)  # revealed: <module 'a.foo'>
+```
+
+`a/__init__.pyi`:
+
+```pyi
+from .b import c
+from .foo import Foo
+```
+
+`a/foo.pyi`:
+
+```pyi
+class Foo: ...
+```
+
+`a/b/__init__.pyi`:
+
+```pyi
+```
+
+`a/b/c.pyi`:
+
+```pyi
+```

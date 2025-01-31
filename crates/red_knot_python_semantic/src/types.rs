@@ -34,7 +34,7 @@ use crate::semantic_index::{
 };
 use crate::stdlib::{builtins_symbol, known_module_symbol, typing_extensions_symbol};
 use crate::suppression::check_suppressions;
-use crate::symbol::{Boundness, Symbol};
+use crate::symbol::{Boundness, ReExport, Symbol};
 use crate::types::call::{
     bind_call, CallArguments, CallBinding, CallDunderResult, CallOutcome, StaticAssertionErrorKind,
 };
@@ -127,9 +127,9 @@ fn symbol<'db>(db: &'db dyn Db, scope: ScopeId<'db>, name: &str) -> Symbol<'db> 
 
         match declared {
             // Symbol is declared, trust the declared type
-            Ok(symbol @ Symbol::Type(_, Boundness::Bound)) => symbol,
+            Ok(symbol @ Symbol::Type(_, _, Boundness::Bound)) => symbol,
             // Symbol is possibly declared
-            Ok(Symbol::Type(declared_ty, Boundness::PossiblyUnbound)) => {
+            Ok(Symbol::Type(declared_ty, re_export, Boundness::PossiblyUnbound)) => {
                 let bindings = use_def.public_bindings(symbol_id);
                 let inferred = symbol_from_bindings(db, bindings);
 
@@ -139,11 +139,12 @@ fn symbol<'db>(db: &'db dyn Db, scope: ScopeId<'db>, name: &str) -> Symbol<'db> 
                         // TODO: We probably don't want to report `Bound` here. This requires a bit of
                         // design work though as we might want a different behavior for stubs and for
                         // normal modules.
-                        Symbol::Type(declared_ty, Boundness::Bound)
+                        Symbol::Type(declared_ty, re_export, Boundness::Bound)
                     }
                     // Symbol is possibly undeclared and (possibly) bound
-                    Symbol::Type(inferred_ty, boundness) => Symbol::Type(
+                    Symbol::Type(inferred_ty, re_export, boundness) => Symbol::Type(
                         UnionType::from_elements(db, [inferred_ty, declared_ty].iter().copied()),
+                        re_export,
                         boundness,
                     ),
                 }
@@ -187,7 +188,7 @@ fn symbol<'db>(db: &'db dyn Db, scope: ScopeId<'db>, name: &str) -> Symbol<'db> 
         && file_to_module(db, scope.file(db))
             .is_some_and(|module| module.is_known(KnownModule::Typing))
     {
-        return Symbol::Type(Type::BooleanLiteral(true), Boundness::Bound);
+        return Symbol::Type(Type::BooleanLiteral(true), ReExport::None, Boundness::Bound);
     }
     if name == "platform"
         && file_to_module(db, scope.file(db))
@@ -197,6 +198,7 @@ fn symbol<'db>(db: &'db dyn Db, scope: ScopeId<'db>, name: &str) -> Symbol<'db> 
             crate::PythonPlatform::Identifier(platform) => {
                 return Symbol::Type(
                     Type::StringLiteral(StringLiteralType::new(db, platform.as_str())),
+                    ReExport::None,
                     Boundness::Bound,
                 );
             }
@@ -386,10 +388,11 @@ fn symbol_from_bindings<'db>(
         if let Some(second) = types.next() {
             Symbol::Type(
                 UnionType::from_elements(db, [first, second].into_iter().chain(types)),
+                ReExport::None,
                 boundness,
             )
         } else {
-            Symbol::Type(first, boundness)
+            Symbol::Type(first, ReExport::None, boundness)
         }
     } else {
         Symbol::Unbound
@@ -482,6 +485,7 @@ fn symbol_from_declarations<'db>(
         let declared_ty = if let Some(second) = types.next() {
             let ty_first = first.inner_type();
             let mut qualifiers = first.qualifiers();
+            let mut re_export = first.re_export();
 
             let mut builder = UnionBuilder::new(db).add(ty_first);
             for other in std::iter::once(second).chain(types) {
@@ -491,8 +495,9 @@ fn symbol_from_declarations<'db>(
                 }
                 builder = builder.add(other_ty);
                 qualifiers = qualifiers.union(other.qualifiers());
+                re_export = other.re_export();
             }
-            TypeAndQualifiers::new(builder.build(), qualifiers)
+            TypeAndQualifiers::new(builder.build(), qualifiers, re_export)
         } else {
             first
         };
@@ -506,7 +511,7 @@ fn symbol_from_declarations<'db>(
             };
 
             Ok(SymbolAndQualifiers(
-                Symbol::Type(declared_ty.inner_type(), boundness),
+                Symbol::Type(declared_ty.inner_type(), declared_ty.re_export(), boundness),
                 declared_ty.qualifiers(),
             ))
         } else {
@@ -1736,7 +1741,7 @@ impl<'db> Type<'db> {
                         Symbol::Unbound => {
                             possibly_unbound = true;
                         }
-                        Symbol::Type(ty_member, member_boundness) => {
+                        Symbol::Type(ty_member, _, member_boundness) => {
                             if member_boundness == Boundness::PossiblyUnbound {
                                 possibly_unbound = true;
                             }
@@ -1752,6 +1757,7 @@ impl<'db> Type<'db> {
                 } else {
                     Symbol::Type(
                         builder.build(),
+                        ReExport::None,
                         if possibly_unbound {
                             Boundness::PossiblyUnbound
                         } else {
@@ -1841,7 +1847,7 @@ impl<'db> Type<'db> {
                     // `Type::call_dunder` here because of the need to check for `__bool__ = bool`.
 
                     // Don't trust a maybe-unbound `__bool__` method.
-                    let Symbol::Type(bool_method, Boundness::Bound) =
+                    let Symbol::Type(bool_method, _, Boundness::Bound) =
                         instance_ty.to_meta_type(db).member(db, "__bool__")
                     else {
                         return Truthiness::Ambiguous;
@@ -2195,10 +2201,10 @@ impl<'db> Type<'db> {
         arguments: &CallArguments<'_, 'db>,
     ) -> CallDunderResult<'db> {
         match self.to_meta_type(db).member(db, name) {
-            Symbol::Type(callable_ty, Boundness::Bound) => {
+            Symbol::Type(callable_ty, _, Boundness::Bound) => {
                 CallDunderResult::CallOutcome(callable_ty.call(db, arguments))
             }
-            Symbol::Type(callable_ty, Boundness::PossiblyUnbound) => {
+            Symbol::Type(callable_ty, _, Boundness::PossiblyUnbound) => {
                 CallDunderResult::PossiblyUnbound(callable_ty.call(db, arguments))
             }
             Symbol::Unbound => CallDunderResult::MethodNotAvailable,
@@ -2532,7 +2538,7 @@ impl<'db> From<&Type<'db>> for Type<'db> {
 
 impl<'db> From<Type<'db>> for Symbol<'db> {
     fn from(value: Type<'db>) -> Self {
-        Symbol::Type(value, Boundness::Bound)
+        Symbol::Type(value, ReExport::None, Boundness::Bound)
     }
 }
 
@@ -2594,16 +2600,30 @@ bitflags! {
 pub(crate) struct TypeAndQualifiers<'db> {
     inner: Type<'db>,
     qualifiers: TypeQualifiers,
+    re_export: ReExport,
 }
 
 impl<'db> TypeAndQualifiers<'db> {
-    pub(crate) fn new(inner: Type<'db>, qualifiers: TypeQualifiers) -> Self {
-        Self { inner, qualifiers }
+    pub(crate) fn new(inner: Type<'db>, qualifiers: TypeQualifiers, re_export: ReExport) -> Self {
+        Self {
+            inner,
+            qualifiers,
+            re_export,
+        }
     }
 
     /// Forget about type qualifiers and only return the inner type.
     pub(crate) fn inner_type(&self) -> Type<'db> {
         self.inner
+    }
+
+    pub(crate) fn with_re_export(mut self, re_export: ReExport) -> Self {
+        self.re_export = re_export;
+        self
+    }
+
+    pub(crate) fn re_export(&self) -> ReExport {
+        self.re_export
     }
 
     /// Insert/add an additional type qualifier.
@@ -2622,6 +2642,7 @@ impl<'db> From<Type<'db>> for TypeAndQualifiers<'db> {
         Self {
             inner,
             qualifiers: TypeQualifiers::empty(),
+            re_export: ReExport::None,
         }
     }
 }
@@ -3791,7 +3812,7 @@ impl<'db> ModuleLiteralType<'db> {
             if imported_submodules.contains(&full_submodule_name) {
                 if let Some(submodule) = resolve_module(db, &full_submodule_name) {
                     let submodule_ty = Type::module_literal(db, importing_file, submodule);
-                    return Symbol::Type(submodule_ty, Boundness::Bound);
+                    return Symbol::Type(submodule_ty, ReExport::None, Boundness::Bound);
                 }
             }
         }
@@ -4166,7 +4187,7 @@ impl<'db> Class<'db> {
                     return todo_type!("instance attribute on class with dynamic base").into();
                 }
                 ClassBase::Class(class) => {
-                    if let member @ SymbolAndQualifiers(Symbol::Type(_, _), _) =
+                    if let member @ SymbolAndQualifiers(Symbol::Type(_, _, _), _) =
                         class.own_instance_member(db, name)
                     {
                         return member;
@@ -4265,7 +4286,7 @@ impl<'db> Class<'db> {
             let declarations = use_def.public_declarations(symbol_id);
 
             match symbol_from_declarations(db, declarations) {
-                Ok(SymbolAndQualifiers(Symbol::Type(declared_ty, _), qualifiers)) => {
+                Ok(SymbolAndQualifiers(Symbol::Type(declared_ty, _, _), qualifiers)) => {
                     // The attribute is declared in the class body.
 
                     if let Some(function) = declared_ty.into_function_literal() {
@@ -4278,7 +4299,10 @@ impl<'db> Class<'db> {
                             todo_type!("bound method").into()
                         }
                     } else {
-                        SymbolAndQualifiers(Symbol::Type(declared_ty, Boundness::Bound), qualifiers)
+                        SymbolAndQualifiers(
+                            Symbol::Type(declared_ty, ReExport::None, Boundness::Bound),
+                            qualifiers,
+                        )
                     }
                 }
                 Ok(SymbolAndQualifiers(Symbol::Unbound, _)) => {

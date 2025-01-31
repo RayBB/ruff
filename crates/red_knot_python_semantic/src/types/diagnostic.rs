@@ -41,6 +41,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&INVALID_RAISE);
     registry.register_lint(&INVALID_TYPE_FORM);
     registry.register_lint(&INVALID_TYPE_VARIABLE_CONSTRAINTS);
+    registry.register_lint(&IMPLICIT_REEXPORT);
     registry.register_lint(&MISSING_ARGUMENT);
     registry.register_lint(&NON_SUBSCRIPTABLE);
     registry.register_lint(&NOT_ITERABLE);
@@ -677,6 +678,46 @@ declare_lint! {
     /// Importing a module that cannot be resolved will raise an `ImportError` at runtime.
     pub(crate) static UNRESOLVED_IMPORT = {
         summary: "detects unresolved imports",
+        status: LintStatus::preview("1.0.0"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for import statements that import names which have been re-exported implicitly.
+    ///
+    /// ## Why is this bad?
+    /// TODO
+    ///
+    /// ## Example
+    ///
+    /// Consider a file `other.py`:
+    ///
+    /// ```python
+    /// from typing import Literal
+    /// ```
+    ///
+    /// And, a file `main.py`:
+    ///
+    /// ```python
+    /// from other import Literal
+    /// ```
+    ///
+    /// Use instead:
+    /// ```python
+    /// from typing import Literal
+    /// ```
+    ///
+    /// Or, explicitly re-export the name in `other.py`:
+    /// ```python
+    /// from typing import Literal as Literal
+    /// ```
+    ///
+    /// ## References
+    /// - [Typing documentation: Import conventions](https://typing.readthedocs.io/en/latest/spec/distributing.html#import-conventions)
+    pub(crate) static IMPLICIT_REEXPORT = {
+        summary: "detects implicit re-exports",
         status: LintStatus::preview("1.0.0"),
         default_level: Level::Error,
     }
