@@ -1,6 +1,5 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
-use itertools::Itertools;
 use ruff_diagnostics::{Diagnostic, Violation};
 use ruff_macros::{derive_message_formats, ViolationMetadata};
 use ruff_python_ast::PySourceType;
@@ -8,6 +7,7 @@ use ruff_python_stdlib::path::is_module_file;
 use ruff_python_stdlib::sys::is_known_standard_library;
 use ruff_text_size::TextRange;
 
+use crate::package::PackageRoot;
 use crate::rules::flake8_builtins;
 use crate::settings::types::PythonVersion;
 
@@ -60,6 +60,7 @@ impl Violation for StdlibModuleShadowing {
 /// A005
 pub(crate) fn stdlib_module_shadowing(
     path: &Path,
+    package: Option<PackageRoot<'_>>,
     settings: &flake8_builtins::settings::Settings,
     target_version: PythonVersion,
     project_root: &Path,
@@ -69,41 +70,12 @@ pub(crate) fn stdlib_module_shadowing(
         return None;
     }
 
-    let mut path = PathBuf::from(path);
+    let package = package?;
 
-    // strip src directories from the path. sort by descending length to strip the longest prefix
-    // available
-    for s in src.iter().sorted_by_key(|p| p.as_os_str().len()).rev() {
-        if let Ok(rest) = path.strip_prefix(s) {
-            path = rest.into();
-            break;
-        }
-    }
-
-    // strip the project root from the path
-    if let Ok(rest) = path.strip_prefix(project_root) {
-        path = rest.into();
-    }
-
-    // if `path` is a file like `__init__.py` use its parent directory as the module name, otherwise
-    // strip the `.py` extension
-    if is_module_file(&path) {
-        path = path.parent()?.into();
+    let module_name = if is_module_file(path) {
+        package.path().file_name().unwrap().to_string_lossy()
     } else {
-        path.set_extension("");
-    };
-
-    // in strict mode, reject based on the final component only. for example, a module named
-    // `utils.logging` is rejected in strict mode but allowed in non-strict mode
-    let module_name = if settings.builtins_strict_checking {
-        path.file_name()?.to_string_lossy().to_string()
-    } else {
-        path.components()
-            .filter_map(|c| match c {
-                Component::Normal(part) => Some(part.to_string_lossy()),
-                _ => None,
-            })
-            .join(".")
+        path.file_stem().unwrap().to_string_lossy()
     };
 
     if !is_known_standard_library(target_version.minor(), &module_name) {
@@ -124,8 +96,22 @@ pub(crate) fn stdlib_module_shadowing(
         return None;
     }
 
+    // all of the modules considered by `is_known_standard_library` are top-level packages, so if
+    // `path` has a parent directory other than `project_root` and any of the `src` directories, it
+    // should not match in non-strict mode
+    let has_parent_module = match path.parent() {
+        Some(parent) => parent != project_root && src.iter().all(|src| src != parent),
+        None => false,
+    };
+
+    if has_parent_module && !settings.builtins_strict_checking {
+        return None;
+    }
+
     Some(Diagnostic::new(
-        StdlibModuleShadowing { name: module_name },
+        StdlibModuleShadowing {
+            name: module_name.to_string(),
+        },
         TextRange::default(),
     ))
 }
