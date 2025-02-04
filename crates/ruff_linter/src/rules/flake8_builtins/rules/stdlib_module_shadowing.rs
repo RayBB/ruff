@@ -1,5 +1,6 @@
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
+use itertools::Itertools;
 use ruff_diagnostics::{Diagnostic, Violation};
 use ruff_macros::{derive_message_formats, ViolationMetadata};
 use ruff_python_ast::PySourceType;
@@ -7,7 +8,7 @@ use ruff_python_stdlib::path::is_module_file;
 use ruff_python_stdlib::sys::is_known_standard_library;
 use ruff_text_size::TextRange;
 
-use crate::package::PackageRoot;
+use crate::rules::flake8_builtins;
 use crate::settings::types::PythonVersion;
 
 /// ## What it does
@@ -59,20 +60,50 @@ impl Violation for StdlibModuleShadowing {
 /// A005
 pub(crate) fn stdlib_module_shadowing(
     path: &Path,
-    package: Option<PackageRoot<'_>>,
-    allowed_modules: &[String],
+    settings: &flake8_builtins::settings::Settings,
     target_version: PythonVersion,
+    project_root: &Path,
+    src: &[PathBuf],
 ) -> Option<Diagnostic> {
     if !PySourceType::try_from_path(path).is_some_and(PySourceType::is_py_file) {
         return None;
     }
 
-    let package = package?;
+    let mut path = PathBuf::from(path);
 
-    let module_name = if is_module_file(path) {
-        package.path().file_name().unwrap().to_string_lossy()
+    // strip src directories from the path. sort by descending length to strip the longest prefix
+    // available
+    for s in src.iter().sorted_by_key(|p| p.as_os_str().len()).rev() {
+        if let Ok(rest) = path.strip_prefix(s) {
+            path = rest.into();
+            break;
+        }
+    }
+
+    // strip the project root from the path
+    if let Ok(rest) = path.strip_prefix(project_root) {
+        path = rest.into();
+    }
+
+    // if `path` is a file like `__init__.py` use its parent directory as the module name, otherwise
+    // strip the `.py` extension
+    if is_module_file(&path) {
+        path = path.parent()?.into();
     } else {
-        path.file_stem().unwrap().to_string_lossy()
+        path.set_extension("");
+    };
+
+    // in strict mode, reject based on the final component only. for example, a module named
+    // `utils.logging` is rejected in strict mode but allowed in non-strict mode
+    let module_name = if settings.builtins_strict_checking {
+        path.file_name()?.to_string_lossy().to_string()
+    } else {
+        path.components()
+            .filter_map(|c| match c {
+                Component::Normal(part) => Some(part.to_string_lossy()),
+                _ => None,
+            })
+            .join(".")
     };
 
     if !is_known_standard_library(target_version.minor(), &module_name) {
@@ -85,7 +116,8 @@ pub(crate) fn stdlib_module_shadowing(
         return None;
     }
 
-    if allowed_modules
+    if settings
+        .builtins_allowed_modules
         .iter()
         .any(|allowed_module| allowed_module == &module_name)
     {
@@ -93,9 +125,7 @@ pub(crate) fn stdlib_module_shadowing(
     }
 
     Some(Diagnostic::new(
-        StdlibModuleShadowing {
-            name: module_name.to_string(),
-        },
+        StdlibModuleShadowing { name: module_name },
         TextRange::default(),
     ))
 }

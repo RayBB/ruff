@@ -48,9 +48,10 @@ pub(crate) fn check_file_path(
     if settings.rules.enabled(Rule::StdlibModuleShadowing) {
         if let Some(diagnostic) = stdlib_module_shadowing(
             path,
-            package,
-            &settings.flake8_builtins.builtins_allowed_modules,
+            &settings.flake8_builtins,
             settings.target_version,
+            &settings.project_root,
+            &settings.src,
         ) {
             diagnostics.push(diagnostic);
         }
