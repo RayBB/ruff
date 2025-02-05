@@ -2176,6 +2176,71 @@ fn flake8_import_convention_unused_aliased_import() {
 }
 
 #[test]
+fn flake8_import_convention_unused_aliased_import_no_conflict() {
+    assert_cmd_snapshot!(Command::new(get_cargo_bin(BIN_NAME))
+        .args(STDIN_BASE_OPTIONS)
+        .arg("--config")
+        .arg(r#"lint.isort.required-imports = ["import pandas as pd"]"#)
+        .args(["--select", "I002,ICN001,F401"])
+        .args(["--stdin-filename", "test.py"])
+        .arg("--unsafe-fixes")
+        .arg("--fix")
+        .arg("-")
+        .pass_stdin("1"));
+}
+
+/// Test that private, old-style `TypeVar` generics
+/// 1. Get replaced with PEP 695 type parameters (UP046, UP047)
+/// 2. Get renamed to remove leading underscores (UP049)
+/// 3. Emit a warning that the standalone type variable is now unused (PYI018)
+/// 4. Remove the now-unused `Generic` import
+#[test]
+fn pep695_generic_rename() {
+    assert_cmd_snapshot!(Command::new(get_cargo_bin(BIN_NAME))
+        .args(STDIN_BASE_OPTIONS)
+        .args(["--select", "F401,PYI018,UP046,UP047,UP049"])
+        .args(["--stdin-filename", "test.py"])
+        .arg("--unsafe-fixes")
+        .arg("--fix")
+        .arg("--preview")
+        .arg("--target-version=py312")
+        .arg("-")
+        .pass_stdin(
+            r#"
+from typing import Generic, TypeVar
+_T = TypeVar("_T")
+
+class OldStyle(Generic[_T]):
+    var: _T
+
+def func(t: _T) -> _T:
+    x: _T
+    return x
+"#
+        ),
+        @r#"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    from typing import TypeVar
+    _T = TypeVar("_T")
+
+    class OldStyle[T]:
+        var: T
+
+    def func[T](t: T) -> T:
+        x: T
+        return x
+
+    ----- stderr -----
+    test.py:3:1: PYI018 Private TypeVar `_T` is never used
+    Found 6 errors (5 fixed, 1 remaining).
+    "#
+    );
+}
+
+#[test]
 fn a005_module_shadowing_strict() -> Result<()> {
     fn create_module(path: &Path) -> Result<()> {
         fs::create_dir(path)?;
