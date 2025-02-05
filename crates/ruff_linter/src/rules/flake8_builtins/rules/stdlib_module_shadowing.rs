@@ -72,8 +72,8 @@ pub(crate) fn stdlib_module_shadowing(
 
     let package = package?;
 
-    // for modules, we need to check the path grandparent in non-strict mode, not the parent of the
-    // __init__.py file
+    // for modules, we need to check the package parent in non-strict mode, not the parent of the
+    // __init__.py file. for non-modules we also call `file_stem` to remove the `.py` extension
     let (module_name, parent) = if is_module_file(path) {
         (
             package.path().file_name().unwrap().to_string_lossy(),
