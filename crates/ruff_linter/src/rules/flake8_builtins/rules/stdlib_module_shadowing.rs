@@ -86,33 +86,22 @@ pub(crate) fn stdlib_module_shadowing(
 
     // convert a filesystem path like `foobar/collections/abc` to a sequence of modules like
     // `["foobar", "collections", "abc"]`, stripping anything that's not a normal component
-    let mut path = path
+    for component in path
         .components()
         .filter(|c| matches!(c, Component::Normal(_)))
-        .map(|c| c.as_os_str().to_string_lossy());
-
-    // we always care about the root module
-    let root_module = path.next()?;
-    if !is_allowed_module(settings, &root_module) {
-        return Some(Diagnostic::new(
-            StdlibModuleShadowing {
-                name: root_module.to_string(),
-            },
-            TextRange::default(),
-        ));
-    }
-
-    // in strict mode, we consider every component separately
-    if settings.flake8_builtins.builtins_strict_checking {
-        for component in path {
-            if !is_allowed_module(settings, &component) {
-                return Some(Diagnostic::new(
-                    StdlibModuleShadowing {
-                        name: component.to_string(),
-                    },
-                    TextRange::default(),
-                ));
-            }
+        .map(|c| c.as_os_str().to_string_lossy())
+    {
+        if !is_allowed_module(settings, &component) {
+            return Some(Diagnostic::new(
+                StdlibModuleShadowing {
+                    name: component.to_string(),
+                },
+                TextRange::default(),
+            ));
+        }
+        // in non-strict mode we only consider the first component
+        if !settings.flake8_builtins.builtins_strict_checking {
+            break;
         }
     }
 
