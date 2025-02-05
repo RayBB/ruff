@@ -84,17 +84,16 @@ pub(crate) fn stdlib_module_shadowing(
         path.with_extension("")
     };
 
-    // convert a filesystem path like `foobar/collections/abc` to a vec of modules like
+    // convert a filesystem path like `foobar/collections/abc` to a sequence of modules like
     // `["foobar", "collections", "abc"]`, stripping anything that's not a normal component
-    let path: Vec<_> = path
+    let mut path = path
         .components()
         .filter(|c| matches!(c, Component::Normal(_)))
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect();
+        .map(|c| c.as_os_str().to_string_lossy());
 
     // we always care about the root module
-    let root_module = path.first()?;
-    if !is_allowed_module(settings, root_module) {
+    let root_module = path.next()?;
+    if !is_allowed_module(settings, &root_module) {
         return Some(Diagnostic::new(
             StdlibModuleShadowing {
                 name: root_module.to_string(),
@@ -105,7 +104,7 @@ pub(crate) fn stdlib_module_shadowing(
 
     // in strict mode, we consider every component separately
     if settings.flake8_builtins.builtins_strict_checking {
-        for component in &path {
+        for component in path {
             if !is_allowed_module(settings, &component) {
                 return Some(Diagnostic::new(
                     StdlibModuleShadowing {
