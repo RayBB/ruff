@@ -18,24 +18,68 @@ impl Boundness {
     }
 }
 
+/// Indicates whether a symbol is re-exported using the [import conventions].
+///
+/// [import conventions]: https://typing.readthedocs.io/en/latest/spec/distributing.html#import-conventions
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReExport {
-    Implicit,
-    Explicit,
-    None,
+    /// Symbol is either defined by an import statement and is re-exported, or it could be defined
+    /// by any other statement or expression.
+    ///
+    /// For example, in the following code:
+    /// ```py
+    /// import foo as foo
+    /// from foo import Bar as Bar
+    ///
+    /// baz = 1
+    /// ```
+    ///
+    /// All the symbols (`foo`, `Bar`, and `baz`) are re-exported.
+    Yes,
+
+    /// Symbol is defined by an import statement and is not re-exported.
+    ///
+    /// For example, in the following code:
+    /// ```py
+    /// import foo
+    /// from foo import Bar
+    /// ```
+    ///
+    /// Both `foo` (module) and `Bar` are not re-exported.
+    No,
+
+    /// Symbol is maybe re-exported.
+    ///
+    /// For example, in the following code:
+    /// ```py
+    /// if flag:
+    ///     import foo
+    /// else:
+    ///     import foo as foo
+    /// ```
+    ///
+    /// The `foo` symbol is maybe re-exported, depending on the value of `flag`.
+    ///
+    /// Or, in the following code:
+    /// ```py
+    /// import foo
+    ///
+    /// if flag:
+    ///     foo = 1
+    /// ```
+    ///
+    /// The `foo` symbol is maybe re-exported if the truthiness of `flag` is ambiguous.
+    Maybe,
 }
 
 impl ReExport {
-    pub(crate) const fn is_implicit(self) -> bool {
-        matches!(self, ReExport::Implicit)
-    }
-
     pub(crate) fn or(self, other: ReExport) -> ReExport {
-        match (self, other) {
-            (ReExport::Implicit, _) | (_, ReExport::Implicit) => ReExport::Implicit,
-            (ReExport::Explicit, ReExport::Explicit) => ReExport::Explicit,
-            (non_none, ReExport::None) | (ReExport::None, non_none) => non_none,
-        }
+        let result = match (self, other) {
+            (ReExport::Yes, ReExport::Yes) => ReExport::Yes,
+            (ReExport::No, ReExport::No) => ReExport::No,
+            _ => ReExport::Maybe,
+        };
+        result
     }
 }
 
@@ -139,53 +183,53 @@ mod tests {
         );
         assert_eq!(
             Symbol::Unbound
-                .or_fall_back_to(&db, &Symbol::Type(ty1, ReExport::None, PossiblyUnbound)),
-            Symbol::Type(ty1, ReExport::None, PossiblyUnbound)
+                .or_fall_back_to(&db, &Symbol::Type(ty1, ReExport::Yes, PossiblyUnbound)),
+            Symbol::Type(ty1, ReExport::Yes, PossiblyUnbound)
         );
         assert_eq!(
-            Symbol::Unbound.or_fall_back_to(&db, &Symbol::Type(ty1, ReExport::None, Bound)),
-            Symbol::Type(ty1, ReExport::None, Bound)
+            Symbol::Unbound.or_fall_back_to(&db, &Symbol::Type(ty1, ReExport::Yes, Bound)),
+            Symbol::Type(ty1, ReExport::Yes, Bound)
         );
 
         // Start from a possibly unbound symbol
         assert_eq!(
-            Symbol::Type(ty1, ReExport::None, PossiblyUnbound)
+            Symbol::Type(ty1, ReExport::Yes, PossiblyUnbound)
                 .or_fall_back_to(&db, &Symbol::Unbound),
-            Symbol::Type(ty1, ReExport::None, PossiblyUnbound)
+            Symbol::Type(ty1, ReExport::Yes, PossiblyUnbound)
         );
         assert_eq!(
-            Symbol::Type(ty1, ReExport::None, PossiblyUnbound)
-                .or_fall_back_to(&db, &Symbol::Type(ty2, ReExport::None, PossiblyUnbound)),
+            Symbol::Type(ty1, ReExport::Yes, PossiblyUnbound)
+                .or_fall_back_to(&db, &Symbol::Type(ty2, ReExport::Yes, PossiblyUnbound)),
             Symbol::Type(
                 UnionType::from_elements(&db, [ty2, ty1]),
-                ReExport::None,
+                ReExport::Yes,
                 PossiblyUnbound
             )
         );
         assert_eq!(
-            Symbol::Type(ty1, ReExport::None, PossiblyUnbound)
-                .or_fall_back_to(&db, &Symbol::Type(ty2, ReExport::None, Bound)),
+            Symbol::Type(ty1, ReExport::Yes, PossiblyUnbound)
+                .or_fall_back_to(&db, &Symbol::Type(ty2, ReExport::Yes, Bound)),
             Symbol::Type(
                 UnionType::from_elements(&db, [ty2, ty1]),
-                ReExport::None,
+                ReExport::Yes,
                 Bound
             )
         );
 
         // Start from a definitely bound symbol
         assert_eq!(
-            Symbol::Type(ty1, ReExport::None, Bound).or_fall_back_to(&db, &Symbol::Unbound),
-            Symbol::Type(ty1, ReExport::None, Bound)
+            Symbol::Type(ty1, ReExport::Yes, Bound).or_fall_back_to(&db, &Symbol::Unbound),
+            Symbol::Type(ty1, ReExport::Yes, Bound)
         );
         assert_eq!(
-            Symbol::Type(ty1, ReExport::None, Bound)
-                .or_fall_back_to(&db, &Symbol::Type(ty2, ReExport::None, PossiblyUnbound)),
-            Symbol::Type(ty1, ReExport::None, Bound)
+            Symbol::Type(ty1, ReExport::Yes, Bound)
+                .or_fall_back_to(&db, &Symbol::Type(ty2, ReExport::Yes, PossiblyUnbound)),
+            Symbol::Type(ty1, ReExport::Yes, Bound)
         );
         assert_eq!(
-            Symbol::Type(ty1, ReExport::None, Bound)
-                .or_fall_back_to(&db, &Symbol::Type(ty2, ReExport::None, Bound)),
-            Symbol::Type(ty1, ReExport::None, Bound)
+            Symbol::Type(ty1, ReExport::Yes, Bound)
+                .or_fall_back_to(&db, &Symbol::Type(ty2, ReExport::Yes, Bound)),
+            Symbol::Type(ty1, ReExport::Yes, Bound)
         );
     }
 }

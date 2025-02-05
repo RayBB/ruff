@@ -114,6 +114,7 @@ fn symbol<'db>(db: &'db dyn Db, scope: ScopeId<'db>, name: &str) -> Symbol<'db> 
         scope: ScopeId<'db>,
         is_dunder_slots: bool,
         symbol_id: ScopedSymbolId,
+        name: String,
     ) -> Symbol<'db> {
         let use_def = use_def_map(db, scope);
 
@@ -127,7 +128,27 @@ fn symbol<'db>(db: &'db dyn Db, scope: ScopeId<'db>, name: &str) -> Symbol<'db> 
 
         match declared {
             // Symbol is declared, trust the declared type
-            Ok(symbol @ Symbol::Type(_, _, Boundness::Bound)) => symbol,
+            Ok(symbol @ Symbol::Type(_, re_export, Boundness::Bound)) => {
+                tracing::info!(
+                    "Visible public declarations for symbol {name:?} in {}",
+                    scope.file(db).path(db)
+                );
+                for d in use_def.public_declarations(symbol_id) {
+                    if let Some(declaration) = d.declaration {
+                        tracing::info!(
+                            "  - Declaration range {:?} in {}",
+                            declaration.kind(db).target_range(),
+                            declaration.file(db).path(db)
+                        );
+                    }
+                }
+
+                tracing::info!(
+                    "Re-export of {name:?} in {}: {re_export:?}",
+                    scope.file(db).path(db)
+                );
+                symbol
+            }
             // Symbol is possibly declared
             Ok(Symbol::Type(declared_ty, re_export, Boundness::PossiblyUnbound)) => {
                 let bindings = use_def.public_bindings(symbol_id);
@@ -188,7 +209,7 @@ fn symbol<'db>(db: &'db dyn Db, scope: ScopeId<'db>, name: &str) -> Symbol<'db> 
         && file_to_module(db, scope.file(db))
             .is_some_and(|module| module.is_known(KnownModule::Typing))
     {
-        return Symbol::Type(Type::BooleanLiteral(true), ReExport::None, Boundness::Bound);
+        return Symbol::Type(Type::BooleanLiteral(true), ReExport::Yes, Boundness::Bound);
     }
     if name == "platform"
         && file_to_module(db, scope.file(db))
@@ -198,7 +219,7 @@ fn symbol<'db>(db: &'db dyn Db, scope: ScopeId<'db>, name: &str) -> Symbol<'db> 
             crate::PythonPlatform::Identifier(platform) => {
                 return Symbol::Type(
                     Type::StringLiteral(StringLiteralType::new(db, platform.as_str())),
-                    ReExport::None,
+                    ReExport::Yes,
                     Boundness::Bound,
                 );
             }
@@ -217,7 +238,7 @@ fn symbol<'db>(db: &'db dyn Db, scope: ScopeId<'db>, name: &str) -> Symbol<'db> 
     let is_dunder_slots = name == "__slots__";
     table
         .symbol_id_by_name(name)
-        .map(|symbol| symbol_by_id(db, scope, is_dunder_slots, symbol))
+        .map(|symbol| symbol_by_id(db, scope, is_dunder_slots, symbol, name.to_owned()))
         .unwrap_or(Symbol::Unbound)
 }
 
@@ -388,11 +409,11 @@ fn symbol_from_bindings<'db>(
         if let Some(second) = types.next() {
             Symbol::Type(
                 UnionType::from_elements(db, [first, second].into_iter().chain(types)),
-                ReExport::None,
+                ReExport::Yes,
                 boundness,
             )
         } else {
-            Symbol::Type(first, ReExport::None, boundness)
+            Symbol::Type(first, ReExport::Yes, boundness)
         }
     } else {
         Symbol::Unbound
@@ -483,19 +504,19 @@ fn symbol_from_declarations<'db>(
     if let Some(first) = types.next() {
         let mut conflicting: Vec<Type<'db>> = vec![];
         let declared_ty = if let Some(second) = types.next() {
-            let ty_first = first.inner_type();
+            let first_ty = first.inner_type();
             let mut qualifiers = first.qualifiers();
             let mut re_export = first.re_export();
 
-            let mut builder = UnionBuilder::new(db).add(ty_first);
+            let mut builder = UnionBuilder::new(db).add(first_ty);
             for other in std::iter::once(second).chain(types) {
                 let other_ty = other.inner_type();
-                if !ty_first.is_equivalent_to(db, other_ty) {
+                if !first_ty.is_equivalent_to(db, other_ty) {
                     conflicting.push(other_ty);
                 }
                 builder = builder.add(other_ty);
                 qualifiers = qualifiers.union(other.qualifiers());
-                re_export = other.re_export();
+                re_export = re_export.or(other.re_export());
             }
             TypeAndQualifiers::new(builder.build(), qualifiers, re_export)
         } else {
@@ -1757,7 +1778,7 @@ impl<'db> Type<'db> {
                 } else {
                     Symbol::Type(
                         builder.build(),
-                        ReExport::None,
+                        ReExport::Yes,
                         if possibly_unbound {
                             Boundness::PossiblyUnbound
                         } else {
@@ -2538,7 +2559,7 @@ impl<'db> From<&Type<'db>> for Type<'db> {
 
 impl<'db> From<Type<'db>> for Symbol<'db> {
     fn from(value: Type<'db>) -> Self {
-        Symbol::Type(value, ReExport::None, Boundness::Bound)
+        Symbol::Type(value, ReExport::Yes, Boundness::Bound)
     }
 }
 
@@ -2642,7 +2663,7 @@ impl<'db> From<Type<'db>> for TypeAndQualifiers<'db> {
         Self {
             inner,
             qualifiers: TypeQualifiers::empty(),
-            re_export: ReExport::None,
+            re_export: ReExport::Yes,
         }
     }
 }
@@ -3786,6 +3807,11 @@ pub struct ModuleLiteralType<'db> {
 
 impl<'db> ModuleLiteralType<'db> {
     fn member(self, db: &'db dyn Db, name: &str) -> Symbol<'db> {
+        tracing::debug!(
+            "Looking up member `{}` on module `{}`",
+            name,
+            self.module(db).name()
+        );
         // `__dict__` is a very special member that is never overridden by module globals;
         // we should always look it up directly as an attribute on `types.ModuleType`,
         // never in the global scope of the module.
@@ -3812,11 +3838,13 @@ impl<'db> ModuleLiteralType<'db> {
             if imported_submodules.contains(&full_submodule_name) {
                 if let Some(submodule) = resolve_module(db, &full_submodule_name) {
                     let submodule_ty = Type::module_literal(db, importing_file, submodule);
-                    return Symbol::Type(submodule_ty, ReExport::None, Boundness::Bound);
+                    tracing::debug!("Found submodule `{}`", full_submodule_name);
+                    return Symbol::Type(submodule_ty, ReExport::Yes, Boundness::Bound);
                 }
             }
         }
 
+        tracing::debug!("Looking up global symbol `{}`", name);
         let global_lookup = symbol(db, global_scope(db, self.module(db).file()), name);
 
         // If it's unbound, check if it's present as an instance on `types.ModuleType`
@@ -4300,7 +4328,7 @@ impl<'db> Class<'db> {
                         }
                     } else {
                         SymbolAndQualifiers(
-                            Symbol::Type(declared_ty, ReExport::None, Boundness::Bound),
+                            Symbol::Type(declared_ty, ReExport::Yes, Boundness::Bound),
                             qualifiers,
                         )
                     }

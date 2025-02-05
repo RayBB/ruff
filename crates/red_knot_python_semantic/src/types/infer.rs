@@ -943,7 +943,7 @@ impl<'db> TypeInferenceBuilder<'db> {
             node,
             definition,
             declared_and_inferred_ty,
-            ReExport::None,
+            ReExport::Yes,
         );
     }
 
@@ -2433,9 +2433,9 @@ impl<'db> TypeInferenceBuilder<'db> {
             (
                 full_module_ty,
                 if asname.id() == name.id() {
-                    ReExport::Explicit
+                    ReExport::Yes
                 } else {
-                    ReExport::Implicit
+                    ReExport::No
                 },
             )
         } else if full_module_name.contains('.') {
@@ -2448,11 +2448,11 @@ impl<'db> TypeInferenceBuilder<'db> {
                 self.add_unknown_declaration_with_binding(alias.into(), definition);
                 return;
             };
-            (topmost_parent_ty, ReExport::Implicit)
+            (topmost_parent_ty, ReExport::No)
         } else {
             // If there's no `as` clause and the imported module isn't nested, then the imported
             // module _is_ what we bind into the current scope.
-            (full_module_ty, ReExport::Implicit)
+            (full_module_ty, ReExport::No)
         };
 
         self.add_declaration_with_binding_and_reexport(
@@ -2627,45 +2627,49 @@ impl<'db> TypeInferenceBuilder<'db> {
 
         // First try loading the requested attribute from the module.
         if let Symbol::Type(mut ty, re_export, boundness) = module_ty.member(self.db(), name) {
-            if re_export.is_implicit() {
-                let import_defined_in_stub = module_ty
-                    .expect_module_literal()
-                    .module(self.db())
-                    .file()
-                    .is_stub(self.db().upcast());
+            match (re_export, boundness) {
+                (ReExport::No, _) => {
+                    let import_defined_in_stub = module_ty
+                        .expect_module_literal()
+                        .module(self.db())
+                        .file()
+                        .is_stub(self.db().upcast());
 
-                if import_defined_in_stub {
+                    if import_defined_in_stub {
+                        self.context.report_lint(
+                            &UNRESOLVED_IMPORT,
+                            AnyNodeRef::Alias(alias),
+                            format_args!("Module `{module_name}` has no member `{name}`"),
+                        );
+                        ty = Type::unknown();
+                    } else {
+                        self.context.report_lint(
+                            &IMPLICIT_REEXPORT,
+                            AnyNodeRef::Alias(alias),
+                            format_args!(
+                                "Module `{module_name}` does not explicitly export attribute `{name}`"
+                            ),
+                        );
+                    }
+                }
+                (ReExport::Maybe, _) | (_, Boundness::PossiblyUnbound) => {
                     self.context.report_lint(
-                        &UNRESOLVED_IMPORT,
-                        AnyNodeRef::Alias(alias),
-                        format_args!("Module `{module_name}` has no member `{name}`"),
-                    );
-                    ty = Type::unknown();
-                } else {
-                    self.context.report_lint(
-                        &IMPLICIT_REEXPORT,
+                        &POSSIBLY_UNBOUND_IMPORT,
                         AnyNodeRef::Alias(alias),
                         format_args!(
-                            "Module `{module_name}` does not explicitly export attribute `{name}`"
+                            "Member `{name}` of module `{module_name}` is possibly unbound",
                         ),
                     );
                 }
-            } else if boundness == Boundness::PossiblyUnbound {
-                // TODO: Consider loading _both_ the attribute and any submodule and unioning them
-                // together if the attribute exists but is possibly-unbound.
-                self.context.report_lint(
-                    &POSSIBLY_UNBOUND_IMPORT,
-                    AnyNodeRef::Alias(alias),
-                    format_args!("Member `{name}` of module `{module_name}` is possibly unbound",),
-                );
+                _ => {}
             }
             let re_export = if asname
                 .as_ref()
                 .is_some_and(|asname| asname.id() == name.id())
             {
-                ReExport::Explicit
+                ReExport::Yes
             } else {
-                ReExport::Implicit
+                ReExport::No
             };
             self.add_declaration_with_binding_and_reexport(
                 alias.into(),
@@ -2697,11 +2701,11 @@ impl<'db> TypeInferenceBuilder<'db> {
             if let Some(submodule_ty) = self.module_type_from_name(&full_submodule_name) {
                 let re_export = if asname
                     .as_ref()
-                    .is_some_and(|asname| asname.as_str() == name.as_str())
+                    .is_some_and(|asname| asname.id() == name.id())
                 {
-                    ReExport::Explicit
+                    ReExport::Yes
                 } else {
-                    ReExport::Implicit
+                    ReExport::No
                 };
                 self.add_declaration_with_binding_and_reexport(
                     alias.into(),
@@ -3424,7 +3428,7 @@ impl<'db> TypeInferenceBuilder<'db> {
                             builtins_symbol = typing_extensions_symbol(self.db(), name);
                         }
                     }
-                    Symbol::Type(_, ReExport::Implicit, _) => {
+                    Symbol::Type(_, ReExport::No, _) => {
                         return Symbol::Unbound;
                     }
                     Symbol::Type(..) => {}
@@ -4940,12 +4944,12 @@ impl<'db> TypeInferenceBuilder<'db> {
                         Type::KnownInstance(KnownInstanceType::ClassVar) => TypeAndQualifiers::new(
                             Type::unknown(),
                             TypeQualifiers::CLASS_VAR,
-                            ReExport::None,
+                            ReExport::Yes,
                         ),
                         Type::KnownInstance(KnownInstanceType::Final) => TypeAndQualifiers::new(
                             Type::unknown(),
                             TypeQualifiers::FINAL,
-                            ReExport::None,
+                            ReExport::Yes,
                         ),
                         _ => name_expr_ty
                             .in_type_expression(self.db())

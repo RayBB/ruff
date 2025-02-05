@@ -44,7 +44,7 @@ from math import Iterable
 reveal_type(Iterable)  # revealed: Unknown
 ```
 
-## Explicitly re-exported symbols in stub files
+## Re-exported symbols in stub files
 
 When a symbol is re-exported, imporing it should not raise an error. This tests both `import ...`
 and `from ... import ...` forms.
@@ -248,10 +248,10 @@ from c import Foo
 class Foo: ...
 ```
 
-## Implicit re-exports in `__init__.py`
+## Non-exports in `__init__.py`
 
 Red knot does not special case `__init__.py` files, so if a symbol is imported in `__init__.py`
-without an explicit re-export, it should raise an error.
+which is not re-exported, it should raise an error.
 
 TODO: When we support rule selection, the `implicit-reexport` rule should be disabled by default and
 this test case should be updated to explicitly enable it.
@@ -289,9 +289,9 @@ class Foo: ...
 ```py
 ```
 
-## Explicit re-exports in `__init__.py`
+## Re-exports in `__init__.py`
 
-But, if they're explicitly re-exported, it should not raise an error.
+But, if they're re-exported, it should not raise an error.
 
 TODO: When we support rule selection, the `implicit-reexport` rule should be disabled by default and
 this test case should be updated to explicitly enable it.
@@ -363,4 +363,66 @@ class Foo: ...
 `a/b/c.pyi`:
 
 ```pyi
+```
+
+## Conditional re-export in stub file
+
+The following scenarios are when a re-export happens conditionally in a stub file.
+
+### Global import
+
+```toml
+log = 'salsa=warn,red_knot=debug'
+```
+
+```py
+from a import Foo
+```
+
+`a.pyi`:
+
+```pyi
+def coinflip() -> bool:
+    return True
+
+if coinflip():
+    class Foo: ...
+else:
+    from b import Foo
+
+```
+
+`b.pyi`:
+
+```pyi
+class Foo: ...
+```
+
+### Both branch is an import
+
+Here, both the branches of the condition are import statements where one of them re-exports while
+the other does not.
+
+```py
+# error: "Member `Foo` of module `a` is possibly unbound"
+from a import Foo
+
+reveal_type(Foo)  # revealed: Literal[Foo]
+```
+
+`a.pyi`:
+
+```pyi
+def coinflip() -> bool: ...
+
+if coinflip():
+    from b import Foo
+else:
+    from b import Foo as Foo
+```
+
+`b.pyi`:
+
+```pyi
+class Foo: ...
 ```
