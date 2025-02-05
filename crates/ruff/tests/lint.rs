@@ -2202,6 +2202,7 @@ fn a005_module_shadowing_strict() -> Result<()> {
     // │       │   └── __init__.py
     // │       └── foobar
     // │           └── __init__.py
+    // ├── ruff.toml
     // └── urlparse
     //     └── __init__.py
 
@@ -2218,8 +2219,9 @@ fn a005_module_shadowing_strict() -> Result<()> {
     create_module(&tempdir.path().join("urlparse"))?;
     // also create a ruff.toml to mark the project root
     fs::File::create(tempdir.path().join("ruff.toml"))?;
+
     insta::with_settings!({
-        filters => vec![(tempdir_filter(&tempdir).as_str(), "[TMP]/")]
+        filters => vec![(r"\\", "/")]
     }, {
         assert_cmd_snapshot!(Command::new(get_cargo_bin(BIN_NAME))
             .args(STDIN_BASE_OPTIONS)
