@@ -13,11 +13,6 @@ found in the global scope. The `builtins.pyi` file, that will be used to resolve
 builtins scope, contains multiple symbols from other modules (e.g., `typing`) but those are not
 re-exported.
 
-As per [PEP 484](https://peps.python.org/pep-0484/#stub-files):
-
-> Modules and variables imported into the stub are not considered exported from the stub unless the
-> import uses the `import ... as ...` form or the equivalent `from ... import ... as ...` form.
-
 ```py
 # These symbols are being imported in `builtins.pyi` but shouldn't be considered as being
 # available in the builtins scope.
@@ -31,8 +26,8 @@ reveal_type(sys)  # revealed: Unknown
 
 ## Builtins import
 
-Similarly, trying to import the symbols from the builtins module which aren't re-exported
-should also raise an error.
+Similarly, trying to import the symbols from the builtins module which aren't re-exported should
+also raise an error.
 
 ```py
 # error: "Module `builtins` has no member `Literal`"
@@ -51,8 +46,8 @@ reveal_type(Iterable)  # revealed: Unknown
 
 ## Explicitly re-exported symbols in stub files
 
-When a symbol is re-exported, imporing it should not raise an error.
-This tests both `import ...` and `from ... import ...` forms.
+When a symbol is re-exported, imporing it should not raise an error. This tests both `import ...`
+and `from ... import ...` forms.
 
 Note: Submodule imports in `import ...` form doesn't work because it's a syntax error. For example,
 in `import os.path as os.path` the `os.path` is not a valid identifier.
@@ -216,7 +211,7 @@ from a import Foo
 `a.pyi`:
 
 ```pyi
-from b import AnyFoo as Foo
+from b import Foo
 
 __all__ = ['Foo']
 ```
@@ -224,7 +219,7 @@ __all__ = ['Foo']
 `b.pyi`:
 
 ```pyi
-class AnyFoo: ...
+class Foo: ...
 ```
 
 ## Runtime files
@@ -334,8 +329,8 @@ class Foo: ...
 
 ## Re-exports in `__init__.pyi`
 
-Similarly, for an `__init__.pyi` (stub) file, importing a non-exported name should raise an error but the
-inference would be `Unknown`.
+Similarly, for an `__init__.pyi` (stub) file, importing a non-exported name should raise an error
+but the inference would be `Unknown`.
 
 ```py
 # error: 15 "Module `a` has no member `Foo`"
