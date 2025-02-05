@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use ruff_diagnostics::{Diagnostic, Violation};
 use ruff_macros::{derive_message_formats, ViolationMetadata};
@@ -8,8 +8,7 @@ use ruff_python_stdlib::sys::is_known_standard_library;
 use ruff_text_size::TextRange;
 
 use crate::package::PackageRoot;
-use crate::rules::flake8_builtins;
-use crate::settings::types::PythonVersion;
+use crate::settings::LinterSettings;
 
 /// ## What it does
 /// Checks for modules that use the same names as Python standard-library
@@ -61,10 +60,7 @@ impl Violation for StdlibModuleShadowing {
 pub(crate) fn stdlib_module_shadowing(
     path: &Path,
     package: Option<PackageRoot<'_>>,
-    settings: &flake8_builtins::settings::Settings,
-    target_version: PythonVersion,
-    project_root: &Path,
-    src: &[PathBuf],
+    settings: &LinterSettings,
 ) -> Option<Diagnostic> {
     if !PySourceType::try_from_path(path).is_some_and(PySourceType::is_py_file) {
         return None;
@@ -83,7 +79,7 @@ pub(crate) fn stdlib_module_shadowing(
         (path.file_stem().unwrap().to_string_lossy(), path.parent())
     };
 
-    if !is_known_standard_library(target_version.minor(), &module_name) {
+    if !is_known_standard_library(settings.target_version.minor(), &module_name) {
         return None;
     }
 
@@ -94,6 +90,7 @@ pub(crate) fn stdlib_module_shadowing(
     }
 
     if settings
+        .flake8_builtins
         .builtins_allowed_modules
         .iter()
         .any(|allowed_module| allowed_module == &module_name)
@@ -105,11 +102,13 @@ pub(crate) fn stdlib_module_shadowing(
     // `path` has a parent directory other than `project_root` and any of the `src` directories, it
     // should not match in non-strict mode
     let has_parent_module = match parent {
-        Some(parent) => parent != project_root && src.iter().all(|src| src != parent),
+        Some(parent) => {
+            parent != settings.project_root && settings.src.iter().all(|src| src != parent)
+        }
         None => false,
     };
 
-    if has_parent_module && !settings.builtins_strict_checking {
+    if has_parent_module && !settings.flake8_builtins.builtins_strict_checking {
         return None;
     }
 
