@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use ruff_diagnostics::{Diagnostic, Violation};
 use ruff_macros::{derive_message_formats, ViolationMetadata};
@@ -7,7 +7,6 @@ use ruff_python_stdlib::path::is_module_file;
 use ruff_python_stdlib::sys::is_known_standard_library;
 use ruff_text_size::TextRange;
 
-use crate::package::PackageRoot;
 use crate::settings::LinterSettings;
 
 /// ## What it does
@@ -58,64 +57,84 @@ impl Violation for StdlibModuleShadowing {
 
 /// A005
 pub(crate) fn stdlib_module_shadowing(
-    path: &Path,
-    package: Option<PackageRoot<'_>>,
+    mut path: &Path,
     settings: &LinterSettings,
 ) -> Option<Diagnostic> {
     if !PySourceType::try_from_path(path).is_some_and(PySourceType::is_py_file) {
         return None;
     }
 
-    let package = package?;
-
-    // for modules, we need to check the package parent in non-strict mode, not the parent of the
-    // __init__.py file. for non-modules we also call `file_stem` to remove the `.py` extension
-    let (module_name, parent) = if is_module_file(path) {
-        (
-            package.path().file_name().unwrap().to_string_lossy(),
-            package.path().parent(),
-        )
-    } else {
-        (path.file_stem().unwrap().to_string_lossy(), path.parent())
-    };
-
-    if !is_known_standard_library(settings.target_version.minor(), &module_name) {
-        return None;
+    // strip project root and src prefixes from the path before converting it to a fully-qualified
+    // module path
+    if let Ok(new_path) = path.strip_prefix(&settings.project_root) {
+        path = new_path;
     }
 
+    for dir in &settings.src {
+        if let Ok(new_path) = path.strip_prefix(dir) {
+            path = new_path;
+        }
+    }
+
+    // for modules like `modname/__init__.py`, use the parent directory name, otherwise just trim
+    // the `.py` extension
+    let path = if is_module_file(path) {
+        PathBuf::from(path.parent()?)
+    } else {
+        path.with_extension("")
+    };
+
+    // convert a filesystem path like `foobar/collections/abc` to a vec of modules like
+    // `["foobar", "collections", "abc"]`, stripping anything that's not a normal component
+    let path: Vec<_> = path
+        .components()
+        .filter(|c| matches!(c, Component::Normal(_)))
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect();
+
+    // we always care about the root module
+    let root_module = path.first()?;
+    if !is_allowed_module(settings, root_module) {
+        return Some(Diagnostic::new(
+            StdlibModuleShadowing {
+                name: root_module.to_string(),
+            },
+            TextRange::default(),
+        ));
+    }
+
+    // in strict mode, we consider every component separately
+    if settings.flake8_builtins.builtins_strict_checking {
+        for component in &path {
+            if !is_allowed_module(settings, &component) {
+                return Some(Diagnostic::new(
+                    StdlibModuleShadowing {
+                        name: component.to_string(),
+                    },
+                    TextRange::default(),
+                ));
+            }
+        }
+    }
+
+    None
+}
+
+fn is_allowed_module(settings: &LinterSettings, module: &str) -> bool {
     // Shadowing private stdlib modules is okay.
     // https://github.com/astral-sh/ruff/issues/12949
-    if module_name.starts_with('_') && !module_name.starts_with("__") {
-        return None;
+    if module.starts_with('_') && !module.starts_with("__") {
+        return true;
     }
 
     if settings
         .flake8_builtins
         .builtins_allowed_modules
         .iter()
-        .any(|allowed_module| allowed_module == &module_name)
+        .any(|allowed_module| allowed_module == &module)
     {
-        return None;
+        return true;
     }
 
-    // all of the modules considered by `is_known_standard_library` are top-level packages, so if
-    // `path` has a parent directory other than `project_root` and any of the `src` directories, it
-    // should not match in non-strict mode
-    let has_parent_module = match parent {
-        Some(parent) => {
-            parent != settings.project_root && settings.src.iter().all(|src| src != parent)
-        }
-        None => false,
-    };
-
-    if has_parent_module && !settings.flake8_builtins.builtins_strict_checking {
-        return None;
-    }
-
-    Some(Diagnostic::new(
-        StdlibModuleShadowing {
-            name: module_name.to_string(),
-        },
-        TextRange::default(),
-    ))
+    !is_known_standard_library(settings.target_version.minor(), module)
 }

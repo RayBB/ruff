@@ -2216,21 +2216,33 @@ fn a005_module_shadowing_strict() -> Result<()> {
         create_module(&base.join("collections").join("foobar"))?;
     }
     create_module(&tempdir.path().join("urlparse"))?;
-    // println!(
-    //     "{}",
-    //     String::from_utf8_lossy(
-    //         &Command::new("tree")
-    //             .arg(tempdir.path().as_os_str())
-    //             .output()?
-    //             .stdout
-    //     )
-    // );
-    assert_cmd_snapshot!(Command::new(get_cargo_bin(BIN_NAME))
-        .args(STDIN_BASE_OPTIONS)
-        .arg("--config")
-        .arg(r#"lint.flake8-builtins.builtins-strict-checking = true"#)
-        .args(["--select", "A005"])
-        .arg(tempdir.path()),
-        @"");
+    // also create a ruff.toml to mark the project root
+    fs::File::create(tempdir.path().join("ruff.toml"))?;
+    insta::with_settings!({
+        filters => vec![(tempdir_filter(&tempdir).as_str(), "[TMP]/")]
+    }, {
+        assert_cmd_snapshot!(Command::new(get_cargo_bin(BIN_NAME))
+            .args(STDIN_BASE_OPTIONS)
+            .arg("--config")
+            .arg(r#"lint.flake8-builtins.builtins-strict-checking = true"#)
+            .args(["--select", "A005"])
+            .current_dir(tempdir.path()),
+            @r"
+        success: false
+        exit_code: 1
+        ----- stdout -----
+        abc/__init__.py:1:1: A005 Module `abc` shadows a Python standard-library module
+        collections/__init__.py:1:1: A005 Module `collections` shadows a Python standard-library module
+        collections/abc/__init__.py:1:1: A005 Module `collections` shadows a Python standard-library module
+        collections/foobar/__init__.py:1:1: A005 Module `collections` shadows a Python standard-library module
+        foobar/abc/__init__.py:1:1: A005 Module `abc` shadows a Python standard-library module
+        foobar/collections/__init__.py:1:1: A005 Module `collections` shadows a Python standard-library module
+        foobar/collections/abc/__init__.py:1:1: A005 Module `collections` shadows a Python standard-library module
+        foobar/collections/foobar/__init__.py:1:1: A005 Module `collections` shadows a Python standard-library module
+        Found 8 errors.
+
+        ----- stderr -----
+        ")
+    });
     Ok(())
 }

@@ -46,7 +46,7 @@ pub(crate) fn check_file_path(
 
     // flake8-builtins
     if settings.rules.enabled(Rule::StdlibModuleShadowing) {
-        if let Some(diagnostic) = stdlib_module_shadowing(path, package, settings) {
+        if let Some(diagnostic) = stdlib_module_shadowing(path, settings) {
             diagnostics.push(diagnostic);
         }
     }
