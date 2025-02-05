@@ -3,9 +3,9 @@
 #![cfg(not(target_family = "wasm"))]
 
 use regex::escape;
-use std::fs;
 use std::process::Command;
 use std::str;
+use std::{fs, path::Path};
 
 use anyhow::Result;
 use assert_fs::fixture::{ChildPath, FileTouch, PathChild};
@@ -2173,4 +2173,64 @@ fn flake8_import_convention_unused_aliased_import() {
         .arg("--fix")
         .arg("-")
         .pass_stdin("1"));
+}
+
+#[test]
+fn a005_module_shadowing_strict() -> Result<()> {
+    fn create_module(path: &Path) -> Result<()> {
+        fs::create_dir(&path)?;
+        fs::File::create(path.join("__init__.py"))?;
+        Ok(())
+    }
+    // construct a directory tree with this structure:
+    // .
+    // ├── abc
+    // │   └── __init__.py
+    // ├── collections
+    // │   ├── __init__.py
+    // │   ├── abc
+    // │   │   └── __init__.py
+    // │   └── foobar
+    // │       └── __init__.py
+    // ├── foobar
+    // │   ├── __init__.py
+    // │   ├── abc
+    // │   │   └── __init__.py
+    // │   └── collections
+    // │       ├── __init__.py
+    // │       ├── abc
+    // │       │   └── __init__.py
+    // │       └── foobar
+    // │           └── __init__.py
+    // └── urlparse
+    //     └── __init__.py
+
+    let tempdir = TempDir::new()?;
+    let foobar = tempdir.path().join("foobar");
+    create_module(&foobar)?;
+    for base in [&tempdir.path().into(), &foobar] {
+        for dir in ["abc", "collections"] {
+            create_module(&base.join(dir))?;
+        }
+        create_module(&base.join("collections").join("abc"))?;
+        create_module(&base.join("collections").join("foobar"))?;
+    }
+    create_module(&tempdir.path().join("urlparse"))?;
+    // println!(
+    //     "{}",
+    //     String::from_utf8_lossy(
+    //         &Command::new("tree")
+    //             .arg(tempdir.path().as_os_str())
+    //             .output()?
+    //             .stdout
+    //     )
+    // );
+    assert_cmd_snapshot!(Command::new(get_cargo_bin(BIN_NAME))
+        .args(STDIN_BASE_OPTIONS)
+        .arg("--config")
+        .arg(r#"lint.flake8-builtins.builtins-strict-checking = true"#)
+        .args(["--select", "A005"])
+        .arg(tempdir.path()),
+        @"");
+    Ok(())
 }
