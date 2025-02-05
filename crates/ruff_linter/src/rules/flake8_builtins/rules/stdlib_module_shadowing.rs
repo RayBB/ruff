@@ -72,10 +72,15 @@ pub(crate) fn stdlib_module_shadowing(
 
     let package = package?;
 
-    let module_name = if is_module_file(path) {
-        package.path().file_name().unwrap().to_string_lossy()
+    // for modules, we need to check the path grandparent in non-strict mode, not the parent of the
+    // __init__.py file
+    let (module_name, parent) = if is_module_file(path) {
+        (
+            package.path().file_name().unwrap().to_string_lossy(),
+            package.path().parent(),
+        )
     } else {
-        path.file_stem().unwrap().to_string_lossy()
+        (path.file_stem().unwrap().to_string_lossy(), path.parent())
     };
 
     if !is_known_standard_library(target_version.minor(), &module_name) {
@@ -99,7 +104,7 @@ pub(crate) fn stdlib_module_shadowing(
     // all of the modules considered by `is_known_standard_library` are top-level packages, so if
     // `path` has a parent directory other than `project_root` and any of the `src` directories, it
     // should not match in non-strict mode
-    let has_parent_module = match path.parent() {
+    let has_parent_module = match parent {
         Some(parent) => parent != project_root && src.iter().all(|src| src != parent),
         None => false,
     };
