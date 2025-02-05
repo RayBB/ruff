@@ -2178,7 +2178,7 @@ fn flake8_import_convention_unused_aliased_import() {
 #[test]
 fn a005_module_shadowing_strict() -> Result<()> {
     fn create_module(path: &Path) -> Result<()> {
-        fs::create_dir(&path)?;
+        fs::create_dir(path)?;
         fs::File::create(path.join("__init__.py"))?;
         Ok(())
     }
@@ -2284,7 +2284,7 @@ fn a005_module_shadowing_strict() -> Result<()> {
         Found 8 errors.
 
         ----- stderr -----
-        ")
+        ");
     });
 
     Ok(())

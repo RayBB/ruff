@@ -119,7 +119,7 @@ fn is_allowed_module(settings: &LinterSettings, module: &str) -> bool {
         .flake8_builtins
         .builtins_allowed_modules
         .iter()
-        .any(|allowed_module| allowed_module == &module)
+        .any(|allowed_module| allowed_module == module)
     {
         return true;
     }
