@@ -685,10 +685,14 @@ declare_lint! {
 
 declare_lint! {
     /// ## What it does
-    /// Checks for import statements that import names which have been re-exported implicitly.
+    /// Checks for import statements that import names from a module which imports but does not explicitly
+    /// re-export them.
     ///
     /// ## Why is this bad?
-    /// TODO
+    /// Imports may only be intended for local use, not intended for re-export as part of the public API of a module.
+    /// Allowing other modules to import names that weren't intended for re-export can create inconsistent import
+    /// locations for the same symbol across the codebase, cause breakages if an import is removed, and make
+    /// future refactors more difficult.
     ///
     /// ## Example
     ///
@@ -717,7 +721,7 @@ declare_lint! {
     /// ## References
     /// - [Typing documentation: Import conventions](https://typing.readthedocs.io/en/latest/spec/distributing.html#import-conventions)
     pub(crate) static IMPLICIT_REEXPORT = {
-        summary: "detects implicit re-exports",
+        summary: "detects imports of imported names that are not explicitly re-exported",
         status: LintStatus::preview("1.0.0"),
         default_level: Level::Error,
     }

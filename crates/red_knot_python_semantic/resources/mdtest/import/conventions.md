@@ -11,7 +11,7 @@ Reference:
 When looking up for a name, red knot will fallback to using the builtins scope if the name is not
 found in the global scope. The `builtins.pyi` file, that will be used to resolve any symbol in the
 builtins scope, contains multiple symbols from other modules (e.g., `typing`) but those are not
-being re-exported.
+re-exported.
 
 As per [PEP 484](https://peps.python.org/pep-0484/#stub-files):
 
@@ -31,7 +31,7 @@ reveal_type(sys)  # revealed: Unknown
 
 ## Builtins import
 
-Similarly, trying to import the symbols from the builtins module which aren't explicitly exported
+Similarly, trying to import the symbols from the builtins module which aren't re-exported
 should also raise an error.
 
 ```py
@@ -51,7 +51,7 @@ reveal_type(Iterable)  # revealed: Unknown
 
 ## Explicitly re-exported symbols in stub files
 
-When explicitly re-exporting a symbol or a module, it should not raise an error when importing it.
+When a symbol is re-exported, imporing it should not raise an error.
 This tests both `import ...` and `from ... import ...` forms.
 
 Note: Submodule imports in `import ...` form doesn't work because it's a syntax error. For example,
@@ -77,7 +77,7 @@ from typing import Any as Any, Literal as Literal
 ```py
 ```
 
-## Implicitly re-exported symbols in stub files
+## Non-exported symbols in stub files
 
 Here, none of the symbols are being re-exported in the stub file.
 
@@ -104,9 +104,9 @@ from typing import Any, Literal
 ```pyi
 ```
 
-## Nested implicit re-exports
+## Nested non-exports
 
-Here, the import is being exported implicitly via a chain of modules.
+Here, a chain of modules all don't re-export an import.
 
 ```py
 # error: "Module `a` has no member `Any`"
@@ -141,10 +141,10 @@ from typing import Any
 reveal_type(Any)  # revealed: typing.Any
 ```
 
-## Mixed implicit and explicit re-exports
+## Nested mixed re-export and not
 
 But, if the symbol is being re-exported explicitly in one of the modules in the chain, it should not
-raise an error.
+raise an error at that step in the chain.
 
 ```py
 # error: "Module `a` has no member `Any`"
@@ -255,8 +255,8 @@ class Foo: ...
 
 ## Implicit re-exports in `__init__.py`
 
-Red knot does not special case `__init__.py` files so if the symbols defined in `__init__.py` is in
-the form of an implicit re-export, it should raise an error.
+Red knot does not special case `__init__.py` files, so if a symbol is imported in `__init__.py`
+without an explicit re-export, it should raise an error.
 
 TODO: When we support rule selection, the `implicit-reexport` rule should be disabled by default and
 this test case should be updated to explicitly enable it.
@@ -334,7 +334,7 @@ class Foo: ...
 
 ## Re-exports in `__init__.pyi`
 
-Similarly, for an `__init__.pyi` (stub) file, the implicit re-export should raise an error but the
+Similarly, for an `__init__.pyi` (stub) file, importing a non-exported name should raise an error but the
 inference would be `Unknown`.
 
 ```py
