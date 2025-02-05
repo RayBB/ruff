@@ -2242,7 +2242,27 @@ fn a005_module_shadowing_strict() -> Result<()> {
         Found 8 errors.
 
         ----- stderr -----
+        ");
+
+        assert_cmd_snapshot!(Command::new(get_cargo_bin(BIN_NAME))
+            .args(STDIN_BASE_OPTIONS)
+            .arg("--config")
+            .arg(r#"lint.flake8-builtins.builtins-strict-checking = false"#)
+            .args(["--select", "A005"])
+            .current_dir(tempdir.path()),
+            @r"
+        success: false
+        exit_code: 1
+        ----- stdout -----
+        abc/__init__.py:1:1: A005 Module `abc` shadows a Python standard-library module
+        collections/__init__.py:1:1: A005 Module `collections` shadows a Python standard-library module
+        collections/abc/__init__.py:1:1: A005 Module `collections` shadows a Python standard-library module
+        collections/foobar/__init__.py:1:1: A005 Module `collections` shadows a Python standard-library module
+        Found 4 errors.
+
+        ----- stderr -----
         ")
     });
+
     Ok(())
 }
